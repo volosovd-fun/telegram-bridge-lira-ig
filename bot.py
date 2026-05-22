@@ -371,7 +371,7 @@ def process_message(update: dict):
                 msg_msg_type = "text"
 
             # Build full payload with recent_context + channel-instruction
-            preamble = context_store.format_preamble(chat_id, limit=10)
+            preamble = context_store.format_preamble(chat_id, limit=30)
             full_payload = (
                 CHANNEL_INSTRUCTION + "\n\n"
                 + h_text.build_message(role, msg_text, msg_msg_type, preamble)
@@ -386,7 +386,7 @@ def process_message(update: dict):
             return
 
         # Multimodal path (voice/photo/video/video_note/document) — common tail
-        preamble = context_store.format_preamble(chat_id, limit=10)
+        preamble = context_store.format_preamble(chat_id, limit=30)
         full_payload = (
             CHANNEL_INSTRUCTION + "\n\n"
             + h_text.build_message(role, msg_text, msg_type, preamble)
