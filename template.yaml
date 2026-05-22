@@ -1,0 +1,85 @@
+# Ліра IG — telegram-bridge-lira-ig (адаптер для тесту)
+name: telegram-bridge-lira-ig
+display_name: "Telegram Bridge — Ліра (тест)"
+version: "0.1.0"
+author: "Денис Волосов"
+updated: "2026-05-22"
+tagline: "Long-polling Telegram адаптер для lira-ig-v2 (тестовий канал, паралельно з IG webhook)"
+
+description: |
+  Тонкий адаптер між Telegram і Trinity. Long-polling через Bot API,
+  multimodal preprocessing (voice/photo/video/video_note/PDF), виклик
+  lira-ig-v2 через REST /api/agents/{name}/chat. Без LLM-логіки.
+
+  Створено для одноразового тесту Ліри через Telegram паралельно
+  з основним IG webhook. session_id=tg:{chat_id} не перетинається
+  з ig:{sender_id}, тому IG-розмови ізольовані.
+
+resources:
+  cpu: "1"           # Trinity вимагає integer
+  memory: "1g"
+
+# entrypoint: python3 bot.py    # Trinity ІГНОРУЄ це поле — потрібен .trinity/setup.sh
+
+env:
+  TARGET_AGENT: lira-ig-v2
+  TRINITY_API_URL: "http://trinity-backend:8000"
+  CONTEXT_SIZE: "30"
+
+# Credentials які Trinity injectне через credentials/inject
+credentials:
+  required:
+    - name: TELEGRAM_BOT_TOKEN
+      description: "Telegram bot token (від @BotFather) — окремий тестовий бот"
+      service: telegram
+    - name: ALLOWED_DM_USER_IDS
+      description: "CSV user_ids що мають право писати в DM (тільки Денис)"
+      service: telegram
+    - name: ALLOWED_GROUP_USER_IDS
+      description: "CSV user_ids у тестовій групі"
+      service: telegram
+    - name: ADMIN_USER_IDS
+      description: "CSV user_ids з admin-командами (тільки Денис)"
+      service: telegram
+    - name: ELEVENLABS_API_KEY
+      description: "ElevenLabs Scribe v2 (з Lira-IG)"
+      service: elevenlabs
+    - name: GEMINI_API_KEY
+      description: "Google Gemini 2.5 Flash (з Lira-IG)"
+      service: gemini
+
+# TRINITY_MCP_API_KEY автоматично інжектиться Trinity per-agent — НЕ перераховуємо
+
+capabilities:
+  - telegram_long_polling
+  - multimodal_preprocessing
+  - mention_filtering
+  - chat_context_buffer
+
+metrics:
+  - name: messages_received
+    type: counter
+    label: "Messages"
+    description: "Telegram updates received"
+    icon: "envelope"
+
+  - name: bot_replies
+    type: counter
+    label: "Replies"
+    description: "Replies sent to Telegram"
+    icon: "paper-airplane"
+
+  - name: bot_status
+    type: status
+    label: "Bot"
+    description: "Bridge bot status"
+    values:
+      - value: "polling"
+        color: "green"
+        label: "Polling"
+      - value: "starting"
+        color: "yellow"
+        label: "Starting"
+      - value: "error"
+        color: "red"
+        label: "Error"

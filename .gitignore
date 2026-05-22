@@ -1,0 +1,27 @@
+# Trinity-injected files
+.mcp.json
+.env
+.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Trinity workspace runtime
+.local/
+.credentials.enc
+content/
+logs/
+
+# Tmp files
+.tmp_*
+*.swp
