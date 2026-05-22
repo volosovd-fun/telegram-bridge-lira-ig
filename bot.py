@@ -32,6 +32,7 @@ from lib.chat_context import context_store
 from lib.trinity_client import chat_with_agent
 from lib.tg_send import (
     send_message, edit_message, set_reaction, send_chat_action,
+    send_voice, delete_message,
     get_file, get_me, TG_API,
 )
 from handlers import text as h_text
@@ -40,6 +41,7 @@ from handlers import photo as h_photo
 from handlers import video as h_video
 from handlers import document as h_doc
 from handlers import command as h_command
+from handlers import tts as h_tts
 
 
 # Logging
@@ -65,6 +67,26 @@ BOT_USERNAME: str = ""
 # Bridge strips marker from user-visible response and sends a separate message to chat.
 ASK_LIRA_PATTERN = re.compile(r"\[ASK_LIRA:\s*(.+?)\]", re.DOTALL | re.IGNORECASE)
 
+# Marker pattern for voice replies. Lira writes [VOICE: текст] when user
+# asks for a voice note. Bridge extracts the text, sends it through TTS,
+# and posts as a sendVoice. Anything outside the marker is sent as text.
+VOICE_PATTERN = re.compile(r"\[VOICE:\s*(.+?)\]", re.DOTALL | re.IGNORECASE)
+
+# Channel-aware preamble injected into every Trinity payload (Telegram only).
+# Lira's IG path never sees this — IG webhook calls Trinity Public Chat API
+# directly, no bridge in the loop.
+CHANNEL_INSTRUCTION = (
+    '<channel name="telegram">\n'
+    "Якщо користувач явно просить надіслати голосове повідомлення "
+    "(\"запиши голосове\", \"скинь voice\", \"озвуч\", \"скажи голосом\", тощо), "
+    "обгорни ВСЮ свою відповідь у маркер [VOICE: ...твоя репліка...]. "
+    "Bridge витягне текст з маркера, синтезує його твоїм голосом через ElevenLabs "
+    "і надішле як voice-note. Не використовуй маркер коли голосове не просили — "
+    "звичайна відповідь піде звичайним текстом. Не додавай нічого поза маркером, "
+    "коли вирішила відповідати голосом.\n"
+    "</channel>"
+)
+
 
 def extract_and_strip_ask_lira(response: str) -> tuple[str, list[str]]:
     """Find [ASK_LIRA: ...] markers in response.
@@ -74,6 +96,45 @@ def extract_and_strip_ask_lira(response: str) -> tuple[str, list[str]]:
     questions = ASK_LIRA_PATTERN.findall(response)
     clean = ASK_LIRA_PATTERN.sub("", response).strip()
     return clean, [q.strip() for q in questions]
+
+
+def extract_voice(response: str) -> tuple[str, str]:
+    """Find [VOICE: ...] markers. Returns (voice_text, residue_text).
+
+    Multiple markers are joined with newlines. Residue is whatever Lira
+    wrote outside the markers (usually empty, but kept just in case).
+    """
+    matches = VOICE_PATTERN.findall(response)
+    if not matches:
+        return "", response
+    voice_text = "\n\n".join(m.strip() for m in matches).strip()
+    residue = VOICE_PATTERN.sub("", response).strip()
+    return voice_text, residue
+
+
+def deliver_reply(chat_id: int, placeholder_id: int, user_msg_id: int, response: str) -> None:
+    """Send Lira's reply to the user.
+
+    If response contains [VOICE: ...], synthesize through ElevenLabs and
+    send as a voice-note (deleting the placeholder). Otherwise edit the
+    placeholder with the text reply.
+    """
+    voice_text, residue = extract_voice(response)
+    if voice_text:
+        send_chat_action(chat_id, "record_voice")
+        audio = h_tts.synthesize(voice_text)
+        if audio:
+            delete_message(chat_id, placeholder_id)
+            send_voice(chat_id, audio, reply_to_message_id=user_msg_id)
+            if residue:
+                send_message(chat_id, residue, parse_mode="Markdown")
+            return
+        # TTS failed — fall back to plain text so the user still gets a reply
+        log.warning("[deliver] TTS failed, sending voice_text as plain text")
+        edit_message(chat_id, placeholder_id, voice_text, parse_mode=None)
+        return
+
+    edit_message(chat_id, placeholder_id, response or "...", parse_mode="Markdown")
 
 
 def is_for_bot(message: dict) -> bool:
@@ -309,13 +370,16 @@ def process_message(update: dict):
                 msg_text = text
                 msg_msg_type = "text"
 
-            # Build full payload with recent_context
+            # Build full payload with recent_context + channel-instruction
             preamble = context_store.format_preamble(chat_id, limit=10)
-            full_payload = h_text.build_message(role, msg_text, msg_msg_type, preamble)
+            full_payload = (
+                CHANNEL_INSTRUCTION + "\n\n"
+                + h_text.build_message(role, msg_text, msg_msg_type, preamble)
+            )
 
             response, _ = chat_with_agent(full_payload, session_id=f"tg:{chat_id}")
             clean_response, lira_questions = extract_and_strip_ask_lira(response)
-            edit_message(chat_id, placeholder_id, clean_response or "...", parse_mode="Markdown")
+            deliver_reply(chat_id, placeholder_id, msg_id, clean_response)
             for q in lira_questions[:1]:  # cap at 1 per turn
                 log.info(f"[ask_lira] forwarding to Ліра: {q[:120]}...")
                 send_message(chat_id, q, parse_mode=None)
@@ -323,10 +387,13 @@ def process_message(update: dict):
 
         # Multimodal path (voice/photo/video/video_note/document) — common tail
         preamble = context_store.format_preamble(chat_id, limit=10)
-        full_payload = h_text.build_message(role, msg_text, msg_type, preamble)
+        full_payload = (
+            CHANNEL_INSTRUCTION + "\n\n"
+            + h_text.build_message(role, msg_text, msg_type, preamble)
+        )
         response, _ = chat_with_agent(full_payload, session_id=f"tg:{chat_id}")
         clean_response, lira_questions = extract_and_strip_ask_lira(response)
-        edit_message(chat_id, placeholder_id, clean_response or "...", parse_mode="Markdown")
+        deliver_reply(chat_id, placeholder_id, msg_id, clean_response)
         for q in lira_questions[:1]:
             log.info(f"[ask_lira] forwarding to Ліра: {q[:120]}...")
             send_message(chat_id, q, parse_mode=None)

@@ -141,3 +141,33 @@ def get_me() -> dict:
     resp = requests.get(f"{TG_API}/getMe", timeout=10)
     resp.raise_for_status()
     return resp.json()["result"]
+
+
+def send_voice(chat_id: int, voice_bytes: bytes,
+               reply_to_message_id: Optional[int] = None,
+               caption: Optional[str] = None) -> Optional[dict]:
+    """Send OGG OPUS voice note via sendVoice (multipart upload)."""
+    files = {"voice": ("reply.ogg", voice_bytes, "audio/ogg")}
+    data = {"chat_id": str(chat_id)}
+    if reply_to_message_id:
+        data["reply_to_message_id"] = str(reply_to_message_id)
+    if caption:
+        data["caption"] = caption[:1024]
+    try:
+        resp = requests.post(f"{TG_API}/sendVoice", data=data, files=files, timeout=30)
+        resp.raise_for_status()
+        return resp.json().get("result")
+    except requests.RequestException as e:
+        log.error(f"[tg_send] sendVoice failed: {e}")
+        return None
+
+
+def delete_message(chat_id: int, message_id: int) -> bool:
+    """Best-effort deletion (silent on failure)."""
+    try:
+        requests.post(f"{TG_API}/deleteMessage", json={
+            "chat_id": chat_id, "message_id": message_id,
+        }, timeout=5)
+        return True
+    except requests.RequestException:
+        return False
